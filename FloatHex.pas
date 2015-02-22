@@ -117,6 +117,7 @@ asm
   FLD   tbyte ptr [EAX]
   FSTP  qword ptr [EDX]
 {$ENDIF}
+  FWAIT
 end;
 {$ENDIF}
 

@@ -9,9 +9,9 @@
 
 Floating point numbers <> HexString conversion routines
 
-©František Milt 2015-02-20
+©František Milt 2015-04-29
 
-Version 1.3
+Version 1.3.1
 
 ===============================================================================}
 unit FloatHex;
@@ -112,7 +112,7 @@ case Exponent of
                           Mantissa := 0;
                         end;
 end;
-Int64(DoublePtr^) := (Int64(Sign) shl 63) or (Int64(Exponent and $7FF) shl 52) or Mantissa;
+Int64(DoublePtr^) := Int64((Int64(Sign) shl 63) or (Int64(Exponent and $7FF) shl 52) or Mantissa);
 end;
 {$ELSE}
 {$IFDEF FPC}{$ASMMODE intel}{$ENDIF}
@@ -145,7 +145,7 @@ var
   Num:      Single absolute Overlay;
 begin
 RectifyHexString(HexString,8);
-Overlay := StrToInt(HexString);
+Overlay := LongWord(StrToInt(HexString));
 Result := Num;
 end;
 
@@ -235,7 +235,7 @@ var
 {$ENDIF}
 begin
 RectifyHexString(HexString,20);
-Overlay.Part_16 := StrToInt(Copy(HexString,1,5));
+Overlay.Part_16 := Word(StrToInt(Copy(HexString,1,5)));
 Overlay.Part_64 := StrToInt64('$' + Copy(HexString,6,16));
 {$IFDEF Extended64}
 ConvertExtendedToDouble(@Overlay,@Result);

@@ -192,7 +192,7 @@ else
       Mantissa := MantissaShift(Mantissa,11);
       If (Mantissa and UInt64($0010000000000000)) <> 0 then
         Inc(Exponent);
-      Int64(DoublePtr^) := Sign or (UInt64(Exponent and $7FF) shl 52) or (Mantissa and UInt64($000FFFFFFFFFFFFF));
+      UInt64(DoublePtr^) := Sign or (UInt64(Exponent and $7FF) shl 52) or (Mantissa and UInt64($000FFFFFFFFFFFFF));
     end
   else
     // Unnormal, invalid operand

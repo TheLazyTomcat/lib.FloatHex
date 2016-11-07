@@ -35,6 +35,10 @@ unit FloatHex;
   {$MESSAGE FATAL 'Big-endian system not supported'}
 {$ENDIF}
 
+{$IFDEF FPC}
+  {$MODE ObjFPC}{$H+}
+{$ENDIF}
+
 interface
 
 Function SingleToHex(Value: Single): String;

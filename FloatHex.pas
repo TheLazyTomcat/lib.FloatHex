@@ -9,9 +9,9 @@
 
   Floating point numbers <-> HexString conversion routines
 
-  ©František Milt 2015-12-11
+  ©František Milt 2017-05-17
 
-  Version 1.4
+  Version 1.5
 
   Dependencies:
     AuxTypes - github.com/ncs-sniper/Lib.AuxTypes
@@ -21,28 +21,43 @@ unit FloatHex;
 
 {$IF defined(CPUX86_64) or defined(CPUX64)}
   {$DEFINE x64}
-  {$IF not(defined(WINDOWS) or defined(MSWINDOWS))}
-    {$DEFINE PurePascal}
-  {$IFEND}
 {$ELSEIF defined(CPU386)}
   {$DEFINE x86}
 {$ELSE}
   {$DEFINE PurePascal}
 {$IFEND}
 
-{$IF defined(FPC) and not defined(PurePascal)}
-  {$ASMMODE Intel}
-{$IFEND}
+{$IFDEF FPC}
+  {$MODE ObjFPC}{$H+}
+  {$IFNDEF PurePascal}
+    {$ASMMODE Intel}
+  {$ENDIF}
+{$ENDIF}
 
 {$IFDEF ENDIAN_BIG}
   {$MESSAGE FATAL 'Big-endian system not supported'}
 {$ENDIF}
 
-{$IFDEF FPC}
-  {$MODE ObjFPC}{$H+}
-{$ENDIF}
+{
+  Controls behaviour when an 80bit float converted into 64bit float is too large
+  to be represented in 64 bits. When defined, the number gets converted into
+  signed infinity (sign preserved), otherwise an EOverflow exception is raised.
+
+  Not defined by default.
+}
+{.$DEFINE OverflowToInfinity}
 
 interface
+
+uses
+  AuxTypes;
+
+Function HalfToHex(Value: Half): String;
+Function HexToHalf(HexString: String): Half;
+Function TryHexToHalf(const HexString: String; out Value: Half): Boolean;
+Function HexToHalfDef(const HexString: String; const DefaultValue: Half): Half;
+
+//------------------------------------------------------------------------------
 
 Function SingleToHex(Value: Single): String;
 Function HexToSingle(HexString: String): Single;
@@ -65,10 +80,10 @@ Function HexToExtendedDef(const HexString: String; const DefaultValue: Extended)
 
 //------------------------------------------------------------------------------
 
-Function FloatToHex(Value: Double): String; overload;
-Function HexToFloat(const HexString: String): Double; overload;
-Function TryHexToFloat(const HexString: String; out Value: Double): Boolean; overload;
-Function HexToFloatDef(const HexString: String; const DefaultValue: Double): Double; overload;
+Function FloatToHex(Value: Double): String;
+Function HexToFloat(const HexString: String): Double;
+Function TryHexToFloat(const HexString: String; out Value: Double): Boolean;
+Function HexToFloatDef(const HexString: String; const DefaultValue: Double): Double; 
 
 implementation
 
@@ -79,7 +94,7 @@ implementation
 {$IFEND}
 
 uses
-  SysUtils, AuxTypes;
+  SysUtils;
 
 type
   // overlay used when working with 10-byte extended precision float
@@ -101,8 +116,6 @@ procedure RectifyHexString(var Str: String; RequiredLength: Integer);
   end;
 
 begin
-If not StartsWithHexMark(Str) then Str := '$' + Str;
-Inc(RequiredLength);
 If Length(Str) <> RequiredLength then
   begin
     If Length(Str) < RequiredLength then
@@ -110,19 +123,87 @@ If Length(Str) <> RequiredLength then
     else
       Str := Copy(Str,1,RequiredLength);
   end;
+If not StartsWithHexMark(Str) then Str := '$' + Str;
 end;
+
+//------------------------------------------------------------------------------
+
+procedure ConvertDoubleToExtended(DoublePtr, ExtendedPtr: Pointer); register; {$IFNDEF PurePascal}assembler;
+asm
+  FLD   qword ptr [DoublePtr]
+  FSTP  tbyte ptr [ExtendedPtr]
+  FWAIT
+end;
+{$ELSE PurePascal}
+var
+  Sign:         UInt64;
+  Exponent:     Int32;
+  Mantissa:     UInt64;
+  MantissaTZC:  Integer;
+
+  procedure BuildExtendedResult(Upper: UInt16; Lower: UInt64);
+  begin
+    {%H-}PUInt16({%H-}PtrUInt(ExtendedPtr) + 8)^ := Upper;
+    UInt64(ExtendedPtr^) := Lower;
+  end;
+
+  Function TrailingZeroCount(Value: UInt64): Integer;
+  begin
+    If Value <> 0 then
+      begin
+        Result := 0;
+        while (Value and UInt64($8000000000000000)) = 0  do
+          begin
+            Value := UInt64(Value shl 1);
+            Inc(Result);
+          end;
+      end
+    else Result := 64;
+  end;
+
+begin
+Sign := UInt64(DoublePtr^) and UInt64($8000000000000000);
+Exponent := Int32(UInt64(DoublePtr^) shr 52) and $7FF;
+Mantissa := UInt64(DoublePtr^) and UInt64($000FFFFFFFFFFFFF);
+case Exponent of
+        // zero or subnormal
+  0:    If Mantissa <> 0 then
+          begin
+            // subnormals, normalizing
+            MantissaTZC := TrailingZeroCount(Mantissa);
+            BuildExtendedResult(UInt16(Sign shr 48) or UInt16(Exponent - MantissaTZC + 15372),
+                                UInt64(Mantissa shl MantissaTZC));
+          end
+        // signed zero
+        else BuildExtendedResult(UInt16(Sign shr 48),0);
+
+        // infinity or NaN
+  $7FF: If Mantissa <> 0 then
+          begin
+            If (Mantissa and UInt64($0008000000000000)) = 0 then
+              // signaled NaN
+              raise EInvalidOp.Create('Invalid floating point operand')
+            else
+              // quiet signed NaN with mantissa
+              BuildExtendedResult(UInt16(Sign shr 48) or $7FFF,
+                UInt64(Mantissa shl 11) or UInt64($8000000000000000));
+          end  
+        // signed infinity
+        else BuildExtendedResult(UInt16(Sign shr 48) or $7FFF,UInt64($8000000000000000));
+else
+  // normal number
+  BuildExtendedResult(UInt16(Sign shr 48) or UInt16(Exponent + 15360),
+    UInt64(Mantissa shl 11) or UInt64($8000000000000000));
+end;
+end;
+{$ENDIF PurePascal}
 
 //------------------------------------------------------------------------------
 
 procedure ConvertExtendedToDouble(ExtendedPtr, DoublePtr: Pointer); register; {$IFNDEF PurePascal}assembler;
 asm
-{$IFDEF x64}
-  FLD   tbyte ptr [RCX]
-  FSTP  qword ptr [RDX]
-{$ELSE}
-  FLD   tbyte ptr [EAX]
-  FSTP  qword ptr [EDX]
-{$ENDIF}
+  FLD   tbyte ptr [ExtendedPtr]
+  FSTP  qword ptr [DoublePtr]
   FWAIT
 end;
 {$ELSE PurePascal}
@@ -166,12 +247,17 @@ case Exponent of
 
           // subnormal values (resulting exponent in double is 0)
   $3BCC..
-  $3C00:  UInt64(DoublePtr^) := Sign or MantissaShift((Mantissa or UInt64($8000000000000000)),$3C01 - Exponent + 11);
+  $3C00:  UInt64(DoublePtr^) := Sign or MantissaShift((Mantissa or UInt64($8000000000000000)),
+                                                      $3C01 - Exponent + 11);
 
           // exponent is too large to be represented in double (resulting
-          // exponent would be larger than $7FE), converting to signed infinity
+          // exponent would be larger than $7FE), ...
   $43FF..
-  $7FFE:  UInt64(DoublePtr^) := Sign or Infinity;
+  $7FFE:{$IFDEF OverflowToInfinity}
+          UInt64(DoublePtr^) := Sign or Infinity;             // ...convert to signed infinity
+        {$ELSE}
+          raise EOverflow.Create('Floating point overflow');  // ...signal overflow
+        {$ENDIF}
 
           // special cases (inf, NaN, ...)
   $7FFF:  case UInt64(ExtendedPtr^) shr 62 of
@@ -199,7 +285,8 @@ else
       Mantissa := MantissaShift(Mantissa,11);
       If (Mantissa and UInt64($0010000000000000)) <> 0 then
         Inc(Exponent);
-      UInt64(DoublePtr^) := Sign or (UInt64(Exponent and $7FF) shl 52) or (Mantissa and UInt64($000FFFFFFFFFFFFF));
+      UInt64(DoublePtr^) := Sign or (UInt64(Exponent and $7FF) shl 52) or
+                            (Mantissa and UInt64($000FFFFFFFFFFFFF));
     end
   else
     // Unnormal, invalid operand
@@ -207,6 +294,47 @@ else
 end;
 end;
 {$ENDIF PurePascal}
+
+//==============================================================================
+
+Function HalfToHex(Value: Half): String;
+var
+  Overlay:  UInt16 absolute Value;
+begin
+Result := IntToHex(Overlay,4);
+end;
+
+//------------------------------------------------------------------------------
+
+Function HexToHalf(HexString: String): Half;
+var
+  Overlay:  UInt16;
+  Num:      Half absolute Overlay;
+begin
+RectifyHexString(HexString,4);
+Overlay := UInt16(StrToInt(HexString));
+Result := Num;
+end;
+
+//------------------------------------------------------------------------------
+
+Function TryHexToHalf(const HexString: String; out Value: Half): Boolean;
+begin
+try
+  Value := HexToHalf(HexString);
+  Result := True;
+except
+  Result := False;
+end;
+end;
+
+//------------------------------------------------------------------------------
+
+Function HexToHalfDef(const HexString: String; const DefaultValue: Half): Half;
+begin
+If not TryHexToHalf(HexString,Result) then
+  Result := DefaultValue;
+end;
 
 //==============================================================================
 
@@ -293,34 +421,26 @@ end;
 //==============================================================================
 
 Function ExtendedToHex(Value: Extended): String;
-{$IFDEF Extended64}
-begin
-Result := DoubleToHex(Value);
-end;
-{$ELSE}
 var
-  Overlay: TExtendedOverlay absolute Value;
+  Overlay:  TExtendedOverlay {$IFNDEF Extended64}absolute Value{$ENDIF};
 begin
+{$IFDEF Extended64}
+ConvertDoubleToExtended(@Value,@Overlay);
+{$ENDIF}
 Result := IntToHex(Overlay.Part_16,4) + IntToHex(Overlay.Part_64,16);
 end;
-{$ENDIF}
 
 //------------------------------------------------------------------------------
 
 Function HexToExtended(HexString: String): Extended;
 var
-  Overlay:  TExtendedOverlay;
-{$IFNDEF Extended64}
-  Num:      Extended absolute Overlay;
-{$ENDIF}
+  Overlay:  TExtendedOverlay {$IFNDEF Extended64}absolute Result{$ENDIF};
 begin
 RectifyHexString(HexString,20);
 Overlay.Part_16 := UInt16(StrToInt(Copy(HexString,1,5)));
 Overlay.Part_64 := UInt64(StrToInt64('$' + Copy(HexString,6,16)));
 {$IFDEF Extended64}
 ConvertExtendedToDouble(@Overlay,@Result);
-{$ELSE}
-Result := Num;
 {$ENDIF}
 end;
 

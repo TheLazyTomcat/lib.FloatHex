@@ -296,8 +296,7 @@ If ((UInt64(ExtendedPtr^) and UInt64($8000000000000000)) = 0) and ((Exponent > 0
   end
 else
   case Exponent of
-            // zero or denormal (denormal cannot be represented as double and is
-            // therefore converted to signed zero)
+            // zero or denormal (denormal cannot be represented as double)
     0:      If Mantissa <> 0 then
               begin
                 // denormal
@@ -374,7 +373,7 @@ else
                       begin
                         // signaled NaN
                         If (ControlWord and CW_EInvalidOP) <> 0 then
-                          // return signed NaN with truncated mantissa
+                          // return quiet signed NaN with truncated mantissa
                           UInt64(DoublePtr^) := Sign or NaN or (Mantissa shr 11)
                         else
                           // signaling NaN

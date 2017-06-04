@@ -196,7 +196,7 @@ case Exponent of
                     UInt64(Mantissa shl 11) or UInt64($C000000000000000))
                 else
                   // signaling NaN
-                  raise EInvalidOp.Create('Invalid floating point operand')
+                  raise EInvalidOp.Create('Invalid floating point operation')
               end
             // quiet signed NaN with mantissa
             else BuildExtendedResult(UInt16(Sign shr 48) or $7FFF,

@@ -9,9 +9,9 @@
 
   Floating point numbers <-> HexString conversion routines
 
-  ©František Milt 2017-06-03
+  ©František Milt 2017-06-05
 
-  Version 1.5.1
+  Version 1.5.2
 
   Dependencies:
     AuxTypes - github.com/ncs-sniper/Lib.AuxTypes
@@ -289,7 +289,7 @@ If ((UInt64(ExtendedPtr^) and UInt64($8000000000000000)) = 0) and ((Exponent > 0
     // unnormal number
     If (ControlWord and CW_EInvalidOP) <> 0 then
       // return negative SNaN (don't ask me, ask Intel)
-      UInt64(DoublePtr^) := NaN or UInt64($8000000000000000)
+      UInt64(DoublePtr^) := UInt64(NaN or UInt64($8000000000000000))
     else
       // invalid operand
       raise EInvalidOp.Create('Invalid floating point operation');
@@ -363,7 +363,7 @@ else
               0,
               1:  If (ControlWord and CW_EInvalidOP) <> 0 then
                     // return negative SNaN
-                    UInt64(DoublePtr^) := NaN or UInt64($8000000000000000)
+                    UInt64(DoublePtr^) := UInt64(NaN or UInt64($8000000000000000))
                   else
                      // invalid operand
                     raise EInvalidOp.Create('Invalid floating point operation');

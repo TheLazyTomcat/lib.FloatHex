@@ -9,9 +9,9 @@
 
   Floating point numbers <-> HexString conversion routines
 
-  ©František Milt 2017-06-05
+  ©František Milt 2017-06-09
 
-  Version 1.5.2
+  Version 1.5.3
 
   Dependencies:
     AuxTypes - github.com/ncs-sniper/Lib.AuxTypes
@@ -414,12 +414,10 @@ end;
 
 Function HexToHalf(HexString: String): Half;
 var
-  Overlay:  UInt16;
-  Num:      Half absolute Overlay;
+  Overlay:  UInt16 absolute Result;
 begin
 RectifyHexString(HexString,4);
 Overlay := UInt16(StrToInt(HexString));
-Result := Num;
 end;
 
 //------------------------------------------------------------------------------
@@ -455,12 +453,10 @@ end;
 
 Function HexToSingle(HexString: String): Single;
 var
-  Overlay:  UInt32;
-  Num:      Single absolute Overlay;
+  Overlay:  UInt32 absolute Result;
 begin
 RectifyHexString(HexString,8);
 Overlay := UInt32(StrToInt(HexString));
-Result := Num;
 end;
 
 //------------------------------------------------------------------------------
@@ -496,12 +492,10 @@ end;
 
 Function HexToDouble(HexString: String): Double;
 var
-  Overlay:  UInt64;
-  Num:      Double absolute Overlay;
+  Overlay:  UInt64 absolute Result;
 begin
 RectifyHexString(HexString,16);
 Overlay := UInt64(StrToInt64(HexString));
-Result := Num;
 end;
 
 //------------------------------------------------------------------------------

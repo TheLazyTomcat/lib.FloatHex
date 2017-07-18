@@ -80,8 +80,10 @@ implementation
 
 {$IF SizeOf(Extended) = 8}
   {$DEFINE Extended64}
-{$ELSE}
+{$ELSEIF SizeOf(Extended) = 10}
   {$UNDEF Extended64}
+{$ELSE}
+  {$MESSAGE FATAL 'Unsupported platform, type extended must be 8 or 10 bytes.'}
 {$IFEND}
 
 uses

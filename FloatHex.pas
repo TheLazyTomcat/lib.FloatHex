@@ -18,6 +18,19 @@
 
 ===============================================================================}
 unit FloatHex;
+{
+  FloatHex_PurePascal
+
+  If you want to compile this unit without ASM, don't want to or cannot define
+  PurePascal for the entire project and at the same time you don't want to or
+  cannot make changes to this unit, define this symbol for the entire project
+  and this unit will be compiled in PurePascal mode.
+}
+{$DEFINE FloatHex_PurePascal}{$message 'remove'}
+{$IFDEF FloatHex_PurePascal}
+  {$DEFINE PurePascal}
+{$ENDIF}
+
 
 {$IF defined(CPUX86_64) or defined(CPUX64)}
   {$DEFINE x64}
@@ -68,6 +81,15 @@ type
   EFHException = class(Exception);
 
   EFHInvalidFlag = class(EFHException);
+
+  EFHFPUException = class(EFHException);
+
+  EFHInvalidOP = class(EFHFPUException);
+  EFHDenormal  = class(EFHFPUException);
+  EFHDivByZero = class(EFHFPUException);  // not generated anywhere, only for the sake of completeness
+  EFHOverflow  = class(EFHFPUException);
+  EFHUnderflow = class(EFHFPUException);
+  EFHPrecision = class(EFHFPUException);
 
 {===============================================================================
     Auxiliary routines
@@ -122,6 +144,14 @@ procedure ConvertFloat80ToFloat64(ExtendedPtr,DoublePtr: Pointer); {$IFNDEF Pure
 {===============================================================================
     Conversion routines
 ===============================================================================}
+
+type
+  // overlay used when working with 10-byte extended precision float
+  TFloat80Overlay = packed record
+    Part_64:  UInt64;
+    Part_16:  UInt16;
+  end;
+  
 {-------------------------------------------------------------------------------
     Type Float16
 -------------------------------------------------------------------------------}
@@ -221,15 +251,20 @@ implementation
     Internal constants and types
 ===============================================================================}
 
-{$IFDEF PurePascal}
 const
-  CW_EInvalidOP = UInt16($0001);  // invalid operation exception mask
-  CW_EOverflow  = UInt16($0008);  // overflow exception mask
-  CW_EUnderflow = UInt16($0010);  // underflow exception mask
-{$IF not Declared(Get8087CW)}
-  CW_Default    = UInt16($1372);  // default FPU control word
-{$IFEND}
-{$ENDIF}
+  F64_MASK_SIGN = UInt64($8000000000000000);  // sign bit
+  F64_MASK_EXP  = UInt64($7FF0000000000000);  // exponent
+  F64_MASK_FRAC = UInt64($000FFFFFFFFFFFFF);  // fraction/mantissa
+  F64_MASK_NSGN = UInt64($7FFFFFFFFFFFFFFF);  // non-sign bits
+  F64_MASK_FHB  = UInt64($0008000000000000);  // highest bit of the mantissa
+  F64_MASK_INTB = UInt64($0010000000000000);  // otherwise implicit integer bit of the mantissa
+
+  F80_MASK16_SIGN = UInt16($8000);
+  F80_MASK16_EXP  = UInt16($7FFF);
+  F80_MASK64_FRAC = UInt64($7FFFFFFFFFFFFFFF);
+  F80_MASK16_NSGN = UInt16($7FFF);
+  F80_MASK64_FHB  = UInt64($4000000000000000);
+  F80_MASK64_INTB = UInt64($8000000000000000);
 
 {===============================================================================
     Auxiliary routines
@@ -366,7 +401,7 @@ end;
 
 Function SetX87Flag(Flag: TX87Flag; NewValue: Boolean): Boolean;
 
-  procedure SetFlag(FlagMask: UInt32);
+  procedure SetFlag(FlagMask: UInt16);
   begin
     If NewValue then
       SetX87ControlWord(GetX87ControlWord or FlagMask)
@@ -418,7 +453,7 @@ procedure SetX87Flags(NewValue: TX87Flags);
 var
   CW: UInt16;
 
-  procedure SetFlag(FlagMask: UInt32; NewState: Boolean);
+  procedure SetFlag(FlagMask: UInt16; NewState: Boolean);
   begin
     If NewState then
       CW := CW or FlagMask
@@ -440,7 +475,7 @@ end;
 
 //==============================================================================
 
-procedure ConvertFloat64ToFloat80(DoublePtr, ExtendedPtr: Pointer); {$IFNDEF PurePascal}register; assembler;
+procedure ConvertFloat64ToFloat80(DoublePtr,ExtendedPtr: Pointer); {$IFNDEF PurePascal}register; assembler;
 asm
     FLD     qword ptr [DoublePtr]
     FSTP    tbyte ptr [ExtendedPtr]
@@ -448,11 +483,10 @@ asm
 end;
 {$ELSE}
 var
-  ControlWord:  UInt16;
-  Sign:         UInt64;
-  Exponent:     Int32;
-  Mantissa:     UInt64;
-  MantissaTZC:  Integer;
+  Sign:           UInt64;
+  Exponent:       Int32;  // biased exponent
+  Mantissa:       UInt64;
+  MantissaShift:  Integer;
 
   procedure BuildExtendedResult(Upper: UInt16; Lower: UInt64);
   begin
@@ -477,73 +511,76 @@ var
   end;
 
 begin
-{$IF Declared(Get8087CW)}
-ControlWord := Get8087CW;
-{$ELSE}
-ControlWord := CW_Default;
-{$IFEND}
-Sign := UInt64(DoublePtr^) and UInt64($8000000000000000);
-Exponent := Int32(UInt64(DoublePtr^) shr 52) and $7FF;
-Mantissa := UInt64(DoublePtr^) and UInt64($000FFFFFFFFFFFFF);
+Sign := UInt64(DoublePtr^) and F64_MASK_SIGN;
+Exponent := Int32((UInt64(DoublePtr^) and F64_MASK_EXP) shr 52);
+Mantissa := UInt64(DoublePtr^) and F64_MASK_FRAC;
 case Exponent of
-        // zero or subnormal
+
+        // zero exponent - zero or denormal
   0:    If Mantissa <> 0 then
           begin
-            // subnormals, normalizing
-            MantissaTZC := HighZeroCount(Mantissa);
-            BuildExtendedResult(UInt16(Sign shr 48) or UInt16(Exponent - MantissaTZC + 15372),
-                                UInt64(Mantissa shl MantissaTZC));
+            // denormal
+            If GetX87Flag(flMaskDenormal) then
+              begin
+              {
+                normalize...
+
+                ...shift mantissa left so that its highest set bit will be shifted
+                to integer bit (bit 63), also correct exponent to reflect this
+                change
+              }
+                MantissaShift := HighZeroCount(Mantissa);
+                BuildExtendedResult(UInt16(Sign shr 48) or UInt16(Exponent - MantissaShift + 15372),
+                                    UInt64(Mantissa shl MantissaShift));
+              end
+            else EFHDenormal.Create('Denormal floating point operand')
           end
         // return signed zero
         else BuildExtendedResult(UInt16(Sign shr 48),0);
 
-        // infinity or NaN
+        // max exponent - infinity or NaN
   $7FF: If Mantissa <> 0 then
           begin
-            If (Mantissa and UInt64($0008000000000000)) = 0 then
+            // not a number
+            If (Mantissa and F64_MASK_FHB) = 0 then
               begin
                 // signaled NaN
-                If (ControlWord and CW_EInvalidOP) <> 0 then
+                If GetX87Flag(flMaskInvalidOp) then
                   // quiet signed NaN with mantissa
-                  BuildExtendedResult(UInt16(Sign shr 48) or $7FFF,
-                    UInt64(Mantissa shl 11) or UInt64($C000000000000000))
+                  BuildExtendedResult(UInt16(Sign shr 48) or F80_MASK16_EXP,
+                                      UInt64(Mantissa shl 11) or F80_MASK64_FHB or F80_MASK64_INTB)
                 else
                   // signaling NaN
-                  raise EInvalidOp.Create('Invalid floating point operation')
+                  raise EFHInvalidOp.Create('Invalid floating point operand');
               end
             // quiet signed NaN with mantissa
-            else BuildExtendedResult(UInt16(Sign shr 48) or $7FFF,
-                   UInt64(Mantissa shl 11) or UInt64($8000000000000000));
+            else BuildExtendedResult(UInt16(Sign shr 48) or F80_MASK16_EXP,
+                                     UInt64(Mantissa shl 11) or F80_MASK64_INTB);
           end  
         // signed infinity
-        else BuildExtendedResult(UInt16(Sign shr 48) or $7FFF,UInt64($8000000000000000));
+        else BuildExtendedResult(UInt16(Sign shr 48) or F80_MASK16_EXP,F80_MASK64_INTB);
 
 else
   // normal number
-  BuildExtendedResult(UInt16(Sign shr 48) or UInt16(Exponent + 15360),
-    UInt64(Mantissa shl 11) or UInt64($8000000000000000));
+  BuildExtendedResult(UInt16(Sign shr 48) or UInt16(Exponent + 15360{16383 - 1023}),
+                      UInt64(Mantissa shl 11) or F80_MASK64_INTB);
 end;
 end;
 {$ENDIF}
 
 //------------------------------------------------------------------------------
 
-procedure ConvertFloat80ToFloat64(ExtendedPtr, DoublePtr: Pointer); register; {$IFNDEF PurePascal}assembler;
+procedure ConvertFloat80ToFloat64(ExtendedPtr,DoublePtr: Pointer); register; {$IFNDEF PurePascal}assembler;
 asm
-  FLD   tbyte ptr [ExtendedPtr]
-  FSTP  qword ptr [DoublePtr]
-  FWAIT
+    FLD     tbyte ptr [ExtendedPtr]       
+    FSTP    qword ptr [DoublePtr]
+    FWAIT
 end;
 {$ELSE PurePascal}
-const
-  Infinity = UInt64($7FF0000000000000);
-  NaN      = UInt64($7FF8000000000000);
 var
-  ControlWord:  UInt16;
-  RoundMode:    Integer;
   Sign:         UInt64;
-  Exponent:     Int32;
-  Mantissa:     UInt64;
+  Exponent:     Int32;    // biased exponent
+  Mantissa:     UInt64;   // including integer bit
 
   Function ShiftMantissa(Value: UInt64; Shift: Byte): UInt64;
   var
@@ -559,6 +596,7 @@ var
     end;
 
   begin
+  (*
     If (Shift > 0) and (Shift <= 64) then
       begin
         If Shift = 64 then Result := 0
@@ -585,20 +623,53 @@ var
         end;
       end
     else Result := Value;
+  *)
   end;
 
 begin
-{$IF Declared(Get8087CW)}
-ControlWord := Get8087CW;
-{$ELSE}
-ControlWord := CW_Default;
-{$IFEND}
-RoundMode := (ControlWord shr 10) and 3;
-{$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
 Sign := UInt64(PUInt8(PtrUInt(ExtendedPtr) + 9)^ and $80) shl 56;
 Exponent := Int32(PUInt16(PtrUInt(ExtendedPtr) + 8)^) and $7FFF;
-{$IFDEF FPCDWM}{$POP}{$ENDIF}
-Mantissa := (UInt64(ExtendedPtr^) and UInt64($7FFFFFFFFFFFFFFF));
+Mantissa := UInt64(ExtendedPtr^);
+case Exponent of
+          // exponent of zero - zero or denormal
+    0:    If (Mantissa and F80_MASK64_FRAC) <> 0 then
+            begin
+              // non-zero fraction - denormals
+              If (Mantissa and F80_MASK64_INTB) <> 0 then
+                begin
+                  // integer bit 1 - pseudo-denormal (treat as usual denormal)
+                  If GetX87Flag(flMaskUnderflow) then
+                    // convert to signed zero
+                    PUInt64(DoublePtr)^ := Sign
+                  else
+                    // signal underflow
+                    raise EFHUnderflow.Create('Floating point underflow');                  
+                end
+              else
+                begin
+                  // integer bit 0 - denormal
+                  If GetX87Flag(flMaskUnderflow) then
+                    // convert to signed zero
+                    PUInt64(DoublePtr)^ := Sign
+                  else
+                    // signal underflow
+                    raise EFHUnderflow.Create('Floating point underflow');
+                end;
+            end
+          else
+            begin
+              // fraction of zero - zeroes
+              If (Mantissa and F80_MASK64_INTB) <> 0 then
+                // integer bit 1 - pseudo-zero (convert to normal signed zero)
+                PUInt64(DoublePtr)^ := Sign
+              else
+                // integer bit 0 - normal signed zero
+                PUInt64(DoublePtr)^ := Sign;
+            end;
+else
+end;
+(*
+// check for unsupported encodings
 If ((UInt64(ExtendedPtr^) and UInt64($8000000000000000)) = 0) and ((Exponent > 0) and (Exponent < $7FFF)) then
   begin
     // unnormal number
@@ -713,6 +784,7 @@ else
     UInt64(DoublePtr^) := Sign or (UInt64(Exponent and $7FF) shl 52) or
                           (Mantissa and UInt64($000FFFFFFFFFFFFF));
   end;
+*)
 end;
 {$ENDIF PurePascal}
 
@@ -962,15 +1034,6 @@ end;
     Type Float80
 -------------------------------------------------------------------------------}
 
-type
-  // overlay used when working with 10-byte extended precision float
-  TFloat80Overlay = packed record
-    Part_64:  Int64;
-    Part_16:  UInt16;
-  end;
-
-//------------------------------------------------------------------------------
-
 Function Float80ToHex(Value: Float80): String;
 var
   Overlay:  TFloat80Overlay {$IFNDEF Extended64}absolute Value{$ENDIF};
@@ -989,8 +1052,8 @@ var
   Overlay:  TFloat80Overlay {$IFNDEF Extended64}absolute Result{$ENDIF};
 begin
 Temp := RectifyHexString(HexString,20);
-Overlay.Part_16 := UInt16(StrToInt(Copy(HexString,1,5)));
-Overlay.Part_64 := StrToInt64('$' + Copy(HexString,6,16));
+Overlay.Part_16 := UInt16(StrToInt(Copy(Temp,1,5)));
+Overlay.Part_64 := UInt64(StrToInt64('$' + Copy(Temp,6,16)));
 {$IFDEF Extended64}
 ConvertFloat80ToFloat64(@Overlay,@Result);
 {$ENDIF}

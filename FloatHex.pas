@@ -18,27 +18,6 @@
 
 ===============================================================================}
 unit FloatHex;
-{
-  FloatHex_PurePascal
-
-  If you want to compile this unit without ASM, don't want to or cannot define
-  PurePascal for the entire project and at the same time you don't want to or
-  cannot make changes to this unit, define this symbol for the entire project
-  and this unit will be compiled in PurePascal mode.
-}
-{$DEFINE FloatHex_PurePascal}{$message 'remove'}
-{$IFDEF FloatHex_PurePascal}
-  {$DEFINE PurePascal}
-{$ENDIF}
-
-
-{$IF defined(CPUX86_64) or defined(CPUX64)}
-  {$DEFINE x64}
-{$ELSEIF defined(CPU386)}
-  {$DEFINE x86}
-{$ELSE}
-  {$DEFINE PurePascal}
-{$IFEND}
 
 {$IFDEF ENDIAN_BIG}
   {$MESSAGE FATAL 'Big-endian system not supported'}
@@ -48,11 +27,6 @@ unit FloatHex;
   {$MODE ObjFPC}
   {$INLINE ON}
   {$DEFINE CanInline}
-  {$IFNDEF PurePascal}
-    {$ASMMODE Intel}
-  {$ENDIF}
-  {$DEFINE FPC_DisableWarns}
-  {$MACRO ON}
 {$ELSE}
   {$IF CompilerVersion >= 17 then}  // Delphi 2005+
     {$DEFINE CanInline}
@@ -62,6 +36,13 @@ unit FloatHex;
 {$ENDIF}
 {$H+}
 
+interface
+
+uses
+  SysUtils,
+  AuxTypes, Float80Utils;
+
+// cannot be placed any higher because of FPC
 {$IF SizeOf(Extended) = 8}
   {$DEFINE Extended64}
 {$ELSEIF SizeOf(Extended) = 10}
@@ -70,90 +51,20 @@ unit FloatHex;
   {$MESSAGE FATAL 'Unsupported platform, type extended must be 8 or 10 bytes.'}
 {$IFEND}
 
-interface
-
-uses
-  SysUtils,
-  AuxTypes;
-
 type
-  // library-specific exceptions
+  // library-specific exceptions, unused atm.
   EFHException = class(Exception);
 
-  EFHInvalidFlag = class(EFHException);
-
-  EFHFPUException = class(EFHException);
-
-  EFHInvalidOP = class(EFHFPUException);
-  EFHDenormal  = class(EFHFPUException);
-  EFHDivByZero = class(EFHFPUException);  // not generated anywhere, only for the sake of completeness
-  EFHOverflow  = class(EFHFPUException);
-  EFHUnderflow = class(EFHFPUException);
-  EFHPrecision = class(EFHFPUException);
-
 {===============================================================================
-    Auxiliary routines
+--------------------------------------------------------------------------------
+                        Float <-> HexString conversions
+--------------------------------------------------------------------------------
 ===============================================================================}
-
-const
-  // X87 control word exception masks
-  X87CW_EMASK_InvalidOP = UInt16($0001);
-  X87CW_EMASK_Denormal  = UInt16($0002);
-  X87CW_EMASK_DivByZero = UInt16($0004);
-  X87CW_EMASK_Overflow  = UInt16($0008);
-  X87CW_EMASK_Underflow = UInt16($0010);
-  X87CW_EMASK_Precision = UInt16($0020);
-
-  X87CW_InfinityControl = UInt16($1000);
-
-  X87CW_Precision = UInt16($0300);
-  X87CW_Rounding  = UInt16($0C00);
-
-Function EmulatedX87ControlWord: Boolean;{$IFDEF CanInline} inline; {$ENDIF}
-
-Function GetX87ControlWord: UInt16; {$IFNDEF PurePascal}register; assembler;{$ENDIF}
-procedure SetX87ControlWord(NewValue: UInt16); {$IFNDEF PurePascal}register; assembler;{$ENDIF}
-
-type
-  TX87PrecisionMode = (pcSingle,pcReserved,pcDouble,pcExtended);
-  
-  TX87RoundingMode = (rmNearest,rmDown,rmUp,rmTruncate);
-
-  TX87Flag = (flMaskInvalidOp,flMaskDenormal,flMaskDivByZero,flMaskOverflow,
-              flMaskUnderflow,flMaskPrecision,flInfinityControl);
-
-  TX87Flags = set of TX87Flag;
-
-Function GetX87PrecisionMode: TX87PrecisionMode;
-Function SetX87PrecisionMode(NewValue: TX87PrecisionMode): TX87PrecisionMode;
-
-Function GetX87RoundingMode: TX87RoundingMode;
-Function SetX87RoundingMode(NewValue: TX87RoundingMode): TX87RoundingMode;
-
-Function GetX87Flag(Flag: TX87Flag): Boolean;
-Function SetX87Flag(Flag: TX87Flag; NewValue: Boolean): Boolean;
-
-Function GetX87Flags: TX87Flags;
-procedure SetX87Flags(NewValue: TX87Flags);
-
-//------------------------------------------------------------------------------
-
-procedure ConvertFloat64ToFloat80(DoublePtr,ExtendedPtr: Pointer); {$IFNDEF PurePascal}register; assembler;{$ENDIF}
-procedure ConvertFloat80ToFloat64(ExtendedPtr,DoublePtr: Pointer); {$IFNDEF PurePascal}register; assembler;{$ENDIF}
-
 {===============================================================================
-    Conversion routines
+    Float <-> HexString conversions - declaration
 ===============================================================================}
-
-type
-  // overlay used when working with 10-byte extended precision float
-  TFloat80Overlay = packed record
-    Part_64:  UInt64;
-    Part_16:  UInt16;
-  end;
-  
 {-------------------------------------------------------------------------------
-    Type Float16
+    Float <-> HexString conversions - type Float16
 -------------------------------------------------------------------------------}
 
 Function Float16ToHex(Value: Float16): String;
@@ -162,16 +73,16 @@ Function TryHexToFloat16(const HexString: String; out Value: Float16): Boolean;
 Function HexToFloat16Def(const HexString: String; const DefaultValue: Float16): Float16;
 
 {-------------------------------------------------------------------------------
-    Type Half
+    Float <-> HexString conversions - type Half
 -------------------------------------------------------------------------------}
 
-Function HalfToHex(Value: Half): String;{$IFDEF CanInline} inline; {$ENDIF}
-Function HexToHalf(const HexString: String): Half;{$IFDEF CanInline} inline; {$ENDIF}
-Function TryHexToHalf(const HexString: String; out Value: Half): Boolean;{$IFDEF CanInline} inline; {$ENDIF}
-Function HexToHalfDef(const HexString: String; const DefaultValue: Half): Half;{$IFDEF CanInline} inline; {$ENDIF}
+Function HalfToHex(Value: Half): String;{$IFDEF CanInline} inline;{$ENDIF}
+Function HexToHalf(const HexString: String): Half;{$IFDEF CanInline} inline;{$ENDIF}
+Function TryHexToHalf(const HexString: String; out Value: Half): Boolean;{$IFDEF CanInline} inline;{$ENDIF}
+Function HexToHalfDef(const HexString: String; const DefaultValue: Half): Half;{$IFDEF CanInline} inline;{$ENDIF}
 
 {-------------------------------------------------------------------------------
-    Type Float32
+    Float <-> HexString conversions - type Float32
 -------------------------------------------------------------------------------}
 
 Function Float32ToHex(Value: Float32): String;
@@ -180,16 +91,16 @@ Function TryHexToFloat32(const HexString: String; out Value: Float32): Boolean;
 Function HexToFloat32Def(const HexString: String; const DefaultValue: Float32): Float32;
 
 {-------------------------------------------------------------------------------
-    Type Single
+    Float <-> HexString conversions - type Single
 -------------------------------------------------------------------------------}
 
-Function SingleToHex(Value: Single): String;{$IFDEF CanInline} inline; {$ENDIF}
-Function HexToSingle(const HexString: String): Single;{$IFDEF CanInline} inline; {$ENDIF}
-Function TryHexToSingle(const HexString: String; out Value: Single): Boolean;{$IFDEF CanInline} inline; {$ENDIF}
-Function HexToSingleDef(const HexString: String; const DefaultValue: Single): Single;{$IFDEF CanInline} inline; {$ENDIF}
+Function SingleToHex(Value: Single): String;{$IFDEF CanInline} inline;{$ENDIF}
+Function HexToSingle(const HexString: String): Single;{$IFDEF CanInline} inline;{$ENDIF}
+Function TryHexToSingle(const HexString: String; out Value: Single): Boolean;{$IFDEF CanInline} inline;{$ENDIF}
+Function HexToSingleDef(const HexString: String; const DefaultValue: Single): Single;{$IFDEF CanInline} inline;{$ENDIF}
 
 {-------------------------------------------------------------------------------
-    Type Float64
+    Float <-> HexString conversions - type Float64
 -------------------------------------------------------------------------------}
 
 Function Float64ToHex(Value: Float64): String;
@@ -198,16 +109,16 @@ Function TryHexToFloat64(const HexString: String; out Value: Float64): Boolean;
 Function HexToFloat64Def(const HexString: String; const DefaultValue: Float64): Float64;
 
 {-------------------------------------------------------------------------------
-    Type Double
+    Float <-> HexString conversions - type Double
 -------------------------------------------------------------------------------}
 
-Function DoubleToHex(Value: Double): String;{$IFDEF CanInline} inline; {$ENDIF}
-Function HexToDouble(const HexString: String): Double;{$IFDEF CanInline} inline; {$ENDIF}
-Function TryHexToDouble(const HexString: String; out Value: Double): Boolean;{$IFDEF CanInline} inline; {$ENDIF}
-Function HexToDoubleDef(const HexString: String; const DefaultValue: Double): Double;{$IFDEF CanInline} inline; {$ENDIF}
+Function DoubleToHex(Value: Double): String;{$IFDEF CanInline} inline;{$ENDIF}
+Function HexToDouble(const HexString: String): Double;{$IFDEF CanInline} inline;{$ENDIF}
+Function TryHexToDouble(const HexString: String; out Value: Double): Boolean;{$IFDEF CanInline} inline;{$ENDIF}
+Function HexToDoubleDef(const HexString: String; const DefaultValue: Double): Double;{$IFDEF CanInline} inline;{$ENDIF}
 
 {-------------------------------------------------------------------------------
-    Type Float80
+    Float <-> HexString conversions - type Float80
 -------------------------------------------------------------------------------}
 
 Function Float80ToHex(Value: Float80): String;
@@ -216,580 +127,32 @@ Function TryHexToFloat80(const HexString: String; out Value: Float80): Boolean;
 Function HexToFloat80Def(const HexString: String; const DefaultValue: Float80): Float80;
 
 {-------------------------------------------------------------------------------
-    Type Extended
+    Float <-> HexString conversions - type Extended
 -------------------------------------------------------------------------------}
 
-Function ExtendedToHex(Value: Extended): String;{$IFDEF CanInline} inline; {$ENDIF}
-Function HexToExtended(const HexString: String): Extended;{$IFDEF CanInline} inline; {$ENDIF}
-Function TryHexToExtended(const HexString: String; out Value: Extended): Boolean;{$IFDEF CanInline} inline; {$ENDIF}
-Function HexToExtendedDef(const HexString: String; const DefaultValue: Extended): Extended;{$IFDEF CanInline} inline; {$ENDIF}
+Function ExtendedToHex(Value: Extended): String;{$IFDEF CanInline} inline;{$ENDIF}
+Function HexToExtended(const HexString: String): Extended;{$IFDEF CanInline} inline;{$ENDIF}
+Function TryHexToExtended(const HexString: String; out Value: Extended): Boolean;{$IFDEF CanInline} inline;{$ENDIF}
+Function HexToExtendedDef(const HexString: String; const DefaultValue: Extended): Extended;{$IFDEF CanInline} inline;{$ENDIF}
 
 {-------------------------------------------------------------------------------
-    Default float type
+    Float <-> HexString conversions - default float type
 -------------------------------------------------------------------------------}
 
-Function FloatToHex(Value: Double): String;{$IFDEF CanInline} inline; {$ENDIF}
-Function HexToFloat(const HexString: String): Double;{$IFDEF CanInline} inline; {$ENDIF}
-Function TryHexToFloat(const HexString: String; out Value: Double): Boolean;{$IFDEF CanInline} inline; {$ENDIF}
-Function HexToFloatDef(const HexString: String; const DefaultValue: Double): Double;{$IFDEF CanInline} inline; {$ENDIF}
+Function FloatToHex(Value: Double): String;{$IFDEF CanInline} inline;{$ENDIF}
+Function HexToFloat(const HexString: String): Double;{$IFDEF CanInline} inline;{$ENDIF}
+Function TryHexToFloat(const HexString: String; out Value: Double): Boolean;{$IFDEF CanInline} inline;{$ENDIF}
+Function HexToFloatDef(const HexString: String; const DefaultValue: Double): Double;{$IFDEF CanInline} inline;{$ENDIF}
 
 implementation
 
-{$IFDEF FPC_DisableWarns}
-  {$DEFINE FPCDWM}
-  {$DEFINE W4055:={$WARN 4055 OFF}}   // Conversion between ordinals and pointers is not portable
-  {$PUSH}{$WARN 2005 OFF}             // Comment level $1 found
-  {$IF Defined(FPC) and (FPC_FULLVERSION >= 30000)}
-    {$DEFINE W5092:={$WARN 5092 OFF}} // Variable "$1" of a managed type does not seem to be initialized
-  {$ELSE}
-    {$DEFINE W5092:=}
-  {$IFEND}
-  {$POP}
-{$ENDIF}
-
 {===============================================================================
-    Internal constants and types
+--------------------------------------------------------------------------------
+                        Float <-> HexString conversions
+--------------------------------------------------------------------------------
 ===============================================================================}
-
-const
-  F64_MASK_SIGN = UInt64($8000000000000000);  // sign bit
-  F64_MASK_EXP  = UInt64($7FF0000000000000);  // exponent
-  F64_MASK_FRAC = UInt64($000FFFFFFFFFFFFF);  // fraction/mantissa
-  F64_MASK_NSGN = UInt64($7FFFFFFFFFFFFFFF);  // non-sign bits
-  F64_MASK_FHB  = UInt64($0008000000000000);  // highest bit of the mantissa
-  F64_MASK_INTB = UInt64($0010000000000000);  // otherwise implicit integer bit of the mantissa
-
-  F80_MASK16_SIGN = UInt16($8000);
-  F80_MASK16_EXP  = UInt16($7FFF);
-  F80_MASK64_FRAC = UInt64($7FFFFFFFFFFFFFFF);
-  F80_MASK16_NSGN = UInt16($7FFF);
-  F80_MASK64_FHB  = UInt64($4000000000000000);
-  F80_MASK64_INTB = UInt64($8000000000000000);
-
 {===============================================================================
-    Auxiliary routines
-===============================================================================}
-
-{$IFDEF PurePascal}
-var
-{
-  denormal, underflow and precision exceptions are masked, precision set to
-  extended, rounding set to nearest and infinity control bit set
-}
-  Pas_X87CW: UInt16 = $1372;
-{$ENDIF}
-
-//------------------------------------------------------------------------------
-
-Function EmulatedX87ControlWord: Boolean;
-begin
-{$IFDEF PurePascal}
-Result := True;
-{$ELSE}
-Result := False;
-{$ENDIF}
-end;
-
-//------------------------------------------------------------------------------
-
-Function GetX87ControlWord: UInt16; {$IFNDEF PurePascal}register; assembler;
-var
-  Temp: UInt16;
-asm
-    FSTCW   word ptr [Temp]
-    MOV     AX, word ptr [Temp]
-end;
-{$ELSE}
-begin
-Result := Pas_X87CW;
-end;
-{$ENDIF}
-
-//------------------------------------------------------------------------------
-
-procedure SetX87ControlWord(NewValue: UInt16); {$IFNDEF PurePascal}register; assembler;
-var
-  Temp: UInt16;
-asm
-    MOV     word ptr [Temp], NewValue
-    FLDCW   word ptr [Temp]
-end;
-{$ELSE}
-begin
-Pas_X87CW := NewValue;
-end;
-{$ENDIF}
-
-//------------------------------------------------------------------------------
-
-Function GetX87PrecisionMode: TX87PrecisionMode;
-begin
-case (GetX87ControlWord and X87CW_Precision) shr 8 of
-  0:  Result := pcSingle;
-  2:  Result := pcDouble;
-  3:  Result := pcExtended;
-else
-  Result := pcReserved;
-end;
-end;
-
-//------------------------------------------------------------------------------
-
-Function SetX87PrecisionMode(NewValue: TX87PrecisionMode): TX87PrecisionMode;
-var
-  Num:  UInt16;
-begin
-Result := GetX87PrecisionMode;
-case NewValue of
-  pcSingle:   Num := 0;
-  pcDouble:   Num := 2;
-  pcExtended: Num := 3;
-else
-  Num := 1;
-end;
-SetX87ControlWord((GetX87ControlWord and not X87CW_Precision) or (Num shl 8));
-end;
-
-//------------------------------------------------------------------------------
-
-Function GetX87RoundingMode: TX87RoundingMode;
-begin
-case (GetX87ControlWord and X87CW_Rounding) shr 10 of
-  1:  Result := rmDown;
-  2:  Result := rmUp;
-  3:  Result := rmTruncate;
-else
-  Result := rmNearest;
-end;
-end;
-
-//------------------------------------------------------------------------------
-
-Function SetX87RoundingMode(NewValue: TX87RoundingMode): TX87RoundingMode;
-var
-  Num:  UInt16;
-begin
-Result := GetX87RoundingMode;
-case NewValue of
-  rmDown:     Num := 1;
-  rmUp:       Num := 2;
-  rmTruncate: Num := 3;
-else
-  Num := 0;
-end;
-SetX87ControlWord((GetX87ControlWord and not X87CW_Rounding) or (Num shl 10));
-end;
-
-//------------------------------------------------------------------------------
-
-Function GetX87Flag(Flag: TX87Flag): Boolean;
-begin
-case Flag of
-  flMaskInvalidOp:    Result := (GetX87ControlWord and X87CW_EMASK_InvalidOP) <> 0;
-  flMaskDenormal:     Result := (GetX87ControlWord and X87CW_EMASK_Denormal) <> 0;
-  flMaskDivByZero:    Result := (GetX87ControlWord and X87CW_EMASK_DivByZero) <> 0;
-  flMaskOverflow:     Result := (GetX87ControlWord and X87CW_EMASK_Overflow) <> 0;
-  flMaskUnderflow:    Result := (GetX87ControlWord and X87CW_EMASK_Underflow) <> 0;
-  flMaskPrecision:    Result := (GetX87ControlWord and X87CW_EMASK_Precision) <> 0;
-  flInfinityControl:  Result := (GetX87ControlWord and X87CW_InfinityControl) <> 0;
-else
-  raise EFHInvalidFlag.CreateFmt('GetX87Flag: Invalid flag (%d).',[Ord(Flag)]);
-end;
-end;
-
-//------------------------------------------------------------------------------
-
-Function SetX87Flag(Flag: TX87Flag; NewValue: Boolean): Boolean;
-
-  procedure SetFlag(FlagMask: UInt16);
-  begin
-    If NewValue then
-      SetX87ControlWord(GetX87ControlWord or FlagMask)
-    else
-      SetX87ControlWord(GetX87ControlWord and not FlagMask);
-  end;
-  
-begin
-Result := GetX87Flag(Flag);
-case Flag of
-  flMaskInvalidOp:    SetFlag(X87CW_EMASK_InvalidOP);
-  flMaskDenormal:     SetFlag(X87CW_EMASK_Denormal);
-  flMaskDivByZero:    SetFlag(X87CW_EMASK_DivByZero);
-  flMaskOverflow:     SetFlag(X87CW_EMASK_Overflow);
-  flMaskUnderflow:    SetFlag(X87CW_EMASK_Underflow);
-  flMaskPrecision:    SetFlag(X87CW_EMASK_Precision);
-  flInfinityControl:  SetFlag(X87CW_InfinityControl);
-else
-  raise EFHInvalidFlag.CreateFmt('SetX87Flag: Invalid flag (%d).',[Ord(Flag)]);
-end;
-end;
-
-//------------------------------------------------------------------------------
-
-Function GetX87Flags: TX87Flags;
-var
-  CW: UInt16;
-  i:  TX87Flag;
-begin
-Result := [];
-CW := GetX87ControlWord;
-For i := Low(TX87Flag) to High(TX87Flag) do
-  case i of
-    flMaskInvalidOp:    If (CW and X87CW_EMASK_InvalidOP) <> 0 then Include(Result,i);
-    flMaskDenormal:     If (CW and X87CW_EMASK_Denormal) <> 0 then Include(Result,i);
-    flMaskDivByZero:    If (CW and X87CW_EMASK_DivByZero) <> 0 then Include(Result,i);
-    flMaskOverflow:     If (CW and X87CW_EMASK_Overflow) <> 0 then Include(Result,i);
-    flMaskUnderflow:    If (CW and X87CW_EMASK_Underflow) <> 0 then Include(Result,i);
-    flMaskPrecision:    If (CW and X87CW_EMASK_Precision) <> 0 then Include(Result,i);
-    flInfinityControl:  If (CW and X87CW_InfinityControl) <> 0 then Include(Result,i);
-  else
-    raise EFHInvalidFlag.CreateFmt('GetX87Flags: Invalid flag (%d).',[Ord(i)]);
-  end;
-end;
-
-//------------------------------------------------------------------------------
-
-procedure SetX87Flags(NewValue: TX87Flags);
-var
-  CW: UInt16;
-
-  procedure SetFlag(FlagMask: UInt16; NewState: Boolean);
-  begin
-    If NewState then
-      CW := CW or FlagMask
-    else
-      CW := CW and not FlagMask;
-  end;
-
-begin
-CW := GetX87ControlWord;
-SetFlag(X87CW_EMASK_InvalidOP,flMaskInvalidOp in NewValue);
-SetFlag(X87CW_EMASK_Denormal,flMaskDenormal in NewValue);
-SetFlag(X87CW_EMASK_DivByZero,flMaskDivByZero in NewValue);
-SetFlag(X87CW_EMASK_Overflow,flMaskOverflow in NewValue);
-SetFlag(X87CW_EMASK_Underflow,flMaskUnderflow in NewValue);
-SetFlag(X87CW_EMASK_Precision,flMaskPrecision in NewValue);
-SetFlag(X87CW_InfinityControl,flInfinityControl in NewValue);
-SetX87ControlWord(CW);
-end;
-
-//==============================================================================
-
-procedure ConvertFloat64ToFloat80(DoublePtr,ExtendedPtr: Pointer); {$IFNDEF PurePascal}register; assembler;
-asm
-    FLD     qword ptr [DoublePtr]
-    FSTP    tbyte ptr [ExtendedPtr]
-    FWAIT
-end;
-{$ELSE}
-var
-  Sign:           UInt64;
-  Exponent:       Int32;  // biased exponent
-  Mantissa:       UInt64;
-  MantissaShift:  Integer;
-
-  procedure BuildExtendedResult(Upper: UInt16; Lower: UInt64);
-  begin
-  {$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
-    PUInt16(PtrUInt(ExtendedPtr) + 8)^ := Upper;
-  {$IFDEF FPCDWM}{$POP}{$ENDIF}
-    UInt64(ExtendedPtr^) := Lower;
-  end;
-
-  Function HighZeroCount(Value: UInt64): Integer;
-  begin
-    If Value <> 0 then
-      begin
-        Result := 0;
-        while (Value and UInt64($8000000000000000)) = 0  do
-          begin
-            Value := UInt64(Value shl 1);
-            Inc(Result);
-          end;
-      end
-    else Result := 64;
-  end;
-
-begin
-Sign := UInt64(DoublePtr^) and F64_MASK_SIGN;
-Exponent := Int32((UInt64(DoublePtr^) and F64_MASK_EXP) shr 52);
-Mantissa := UInt64(DoublePtr^) and F64_MASK_FRAC;
-case Exponent of
-
-        // zero exponent - zero or denormal
-  0:    If Mantissa <> 0 then
-          begin
-            // denormal
-            If GetX87Flag(flMaskDenormal) then
-              begin
-              {
-                normalize...
-
-                ...shift mantissa left so that its highest set bit will be shifted
-                to integer bit (bit 63), also correct exponent to reflect this
-                change
-              }
-                MantissaShift := HighZeroCount(Mantissa);
-                BuildExtendedResult(UInt16(Sign shr 48) or UInt16(Exponent - MantissaShift + 15372),
-                                    UInt64(Mantissa shl MantissaShift));
-              end
-            else EFHDenormal.Create('Denormal floating point operand')
-          end
-        // return signed zero
-        else BuildExtendedResult(UInt16(Sign shr 48),0);
-
-        // max exponent - infinity or NaN
-  $7FF: If Mantissa <> 0 then
-          begin
-            // not a number
-            If (Mantissa and F64_MASK_FHB) = 0 then
-              begin
-                // signaled NaN
-                If GetX87Flag(flMaskInvalidOp) then
-                  // quiet signed NaN with mantissa
-                  BuildExtendedResult(UInt16(Sign shr 48) or F80_MASK16_EXP,
-                                      UInt64(Mantissa shl 11) or F80_MASK64_FHB or F80_MASK64_INTB)
-                else
-                  // signaling NaN
-                  raise EFHInvalidOp.Create('Invalid floating point operand');
-              end
-            // quiet signed NaN with mantissa
-            else BuildExtendedResult(UInt16(Sign shr 48) or F80_MASK16_EXP,
-                                     UInt64(Mantissa shl 11) or F80_MASK64_INTB);
-          end  
-        // signed infinity
-        else BuildExtendedResult(UInt16(Sign shr 48) or F80_MASK16_EXP,F80_MASK64_INTB);
-
-else
-  // normal number
-  BuildExtendedResult(UInt16(Sign shr 48) or UInt16(Exponent + 15360{16383 - 1023}),
-                      UInt64(Mantissa shl 11) or F80_MASK64_INTB);
-end;
-end;
-{$ENDIF}
-
-//------------------------------------------------------------------------------
-
-procedure ConvertFloat80ToFloat64(ExtendedPtr,DoublePtr: Pointer); register; {$IFNDEF PurePascal}assembler;
-asm
-    FLD     tbyte ptr [ExtendedPtr]       
-    FSTP    qword ptr [DoublePtr]
-    FWAIT
-end;
-{$ELSE PurePascal}
-var
-  Sign:         UInt64;
-  Exponent:     Int32;    // biased exponent
-  Mantissa:     UInt64;   // including integer bit
-
-  Function ShiftMantissa(Value: UInt64; Shift: Byte): UInt64;
-  var
-    ShiftedOut: UInt64;
-    Distance:   UInt64;
-
-    Function FirstIsSmaller(A,B: UInt64): Boolean;
-    begin
-      If Int64Rec(A).Hi = Int64Rec(B).Hi then
-        Result := Int64Rec(A).Lo < Int64Rec(B).Lo
-      else
-        Result := Int64Rec(A).Hi < Int64Rec(B).Hi;
-    end;
-
-  begin
-  (*
-    If (Shift > 0) and (Shift <= 64) then
-      begin
-        If Shift = 64 then Result := 0
-          else Result := Value shr Shift;
-        ShiftedOut := Value and (UInt64($FFFFFFFFFFFFFFFF) shr (64 - Shift));
-        case RoundMode of
-              // nearest
-          0:  If ShiftedOut <> 0 then
-                begin
-                  If Shift >= 64 then Distance := UInt64(-Int64(ShiftedOut))
-                    else Distance := UInt64((UInt64(1) shl Shift) - ShiftedOut);
-                  If FirstIsSmaller(Distance,ShiftedOut) or
-                     ((Distance = ShiftedOut) and ((Result and 1) <> 0)) then
-                    Inc(Result);
-                end;
-              // down
-          1:  If (Sign <> 0) and (ShiftedOut <> 0) then
-                Inc(Result);
-              // up
-          2:  If (Sign = 0) and (ShiftedOut <> 0) then
-                Inc(Result);
-        else
-          {truncate}  // nothing to do
-        end;
-      end
-    else Result := Value;
-  *)
-  end;
-
-begin
-Sign := UInt64(PUInt8(PtrUInt(ExtendedPtr) + 9)^ and $80) shl 56;
-Exponent := Int32(PUInt16(PtrUInt(ExtendedPtr) + 8)^) and $7FFF;
-Mantissa := UInt64(ExtendedPtr^);
-case Exponent of
-          // exponent of zero - zero or denormal
-    0:    If (Mantissa and F80_MASK64_FRAC) <> 0 then
-            begin
-              // non-zero fraction - denormals
-              If (Mantissa and F80_MASK64_INTB) <> 0 then
-                begin
-                  // integer bit 1 - pseudo-denormal (treat as usual denormal)
-                  If GetX87Flag(flMaskUnderflow) then
-                    // convert to signed zero
-                    PUInt64(DoublePtr)^ := Sign
-                  else
-                    // signal underflow
-                    raise EFHUnderflow.Create('Floating point underflow');                  
-                end
-              else
-                begin
-                  // integer bit 0 - denormal
-                  If GetX87Flag(flMaskUnderflow) then
-                    // convert to signed zero
-                    PUInt64(DoublePtr)^ := Sign
-                  else
-                    // signal underflow
-                    raise EFHUnderflow.Create('Floating point underflow');
-                end;
-            end
-          else
-            begin
-              // fraction of zero - zeroes
-              If (Mantissa and F80_MASK64_INTB) <> 0 then
-                // integer bit 1 - pseudo-zero (convert to normal signed zero)
-                PUInt64(DoublePtr)^ := Sign
-              else
-                // integer bit 0 - normal signed zero
-                PUInt64(DoublePtr)^ := Sign;
-            end;
-else
-end;
-(*
-// check for unsupported encodings
-If ((UInt64(ExtendedPtr^) and UInt64($8000000000000000)) = 0) and ((Exponent > 0) and (Exponent < $7FFF)) then
-  begin
-    // unnormal number
-    If (ControlWord and CW_EInvalidOP) <> 0 then
-      // return negative SNaN (don't ask me, ask Intel)
-      UInt64(DoublePtr^) := UInt64(NaN or UInt64($8000000000000000))
-    else
-      // invalid operand
-      raise EInvalidOp.Create('Invalid floating point operation');
-  end
-else
-  case Exponent of
-            // zero or denormal (denormal cannot be represented as double)
-    0:      If Mantissa <> 0 then
-              begin
-                // denormal
-                If (ControlWord and CW_EUnderflow) <> 0 then
-                  begin
-                    If ((RoundMode = 1{down}) and (Sign <> 0)) or
-                       ((RoundMode = 2{up}) and (Sign = 0)) then
-                      // convert to smallest representable number
-                      UInt64(DoublePtr^) := Sign or 1
-                    else
-                      // convert to signed zero
-                      UInt64(DoublePtr^) := Sign;
-                  end
-                // signal underflow
-                else raise EUnderflow.Create('Floating point underflow');
-              end
-            // return signed zero
-            else UInt64(DoublePtr^) := Sign;
-
-            // exponent is too small to be represented in double even as subnormal
-    1..
-    $3BCB:  If (ControlWord and CW_EUnderflow) <> 0 then
-              begin
-                If ((RoundMode = 1{down}) and (Sign <> 0)) or
-                   ((RoundMode = 2{up}) and (Sign = 0)) then
-                  // convert to smallest representable number
-                  UInt64(DoublePtr^) := Sign or 1
-                else
-                  // convert to signed zero
-                  UInt64(DoublePtr^) := Sign;
-              end
-            // signal underflow
-            else raise EUnderflow.Create('Floating point underflow');
-
-            // subnormal values (resulting exponent in double is 0)
-    $3BCC..
-    $3C00:  If (ControlWord and CW_EUnderflow) <> 0 then
-              UInt64(DoublePtr^) := Sign or ShiftMantissa((Mantissa or
-                UInt64($8000000000000000)),$3C0C - Exponent)
-            else
-              // signal underflow
-              raise EUnderflow.Create('Floating point underflow');
-
-            // exponent is too large to be represented in double (resulting
-            // exponent would be larger than $7FE)
-    $43FF..
-    $7FFE:  If (ControlWord and CW_EOverflow) <> 0 then
-              begin
-                If (RoundMode = 3{trunc}) or
-                   ((RoundMode = 1{down}) and (Sign = 0)) or
-                   ((RoundMode = 2{up}) and (Sign <> 0)) then
-                  // convert to largest representable number
-                  UInt64(DoublePtr^) := Sign or UInt64($7FEFFFFFFFFFFFFF)
-                else
-                  // convert to signed infinity
-                  UInt64(DoublePtr^) := Sign or Infinity
-              end
-            // signal overflow
-            else raise EOverflow.Create('Floating point overflow');
-
-            // special cases (INF, NaN, ...)
-    $7FFF:  case UInt64(ExtendedPtr^) shr 62 of
-                  // pseudo INF, pseudo NaN (treated as invalid operand)
-              0,
-              1:  If (ControlWord and CW_EInvalidOP) <> 0 then
-                    // return negative SNaN
-                    UInt64(DoublePtr^) := UInt64(NaN or UInt64($8000000000000000))
-                  else
-                     // invalid operand
-                    raise EInvalidOp.Create('Invalid floating point operation');
-
-                  // infinity or SNaN
-              2:  If (UInt64(ExtendedPtr^) and UInt64($3FFFFFFFFFFFFFFF)) <> 0 then
-                      begin
-                        // signaled NaN
-                        If (ControlWord and CW_EInvalidOP) <> 0 then
-                          // return quiet signed NaN with truncated mantissa
-                          UInt64(DoublePtr^) := Sign or NaN or (Mantissa shr 11)
-                        else
-                          // signaling NaN
-                          raise EInvalidOp.Create('Invalid floating point operation');
-                      end
-                  // signed infinity
-                  else UInt64(DoublePtr^) := Sign or Infinity;
-
-                  // quiet signed NaN with truncated mantissa
-              3:  UInt64(DoublePtr^) := Sign or NaN or (Mantissa shr 11);
-            else
-              // unknown case, return positive NaN
-              UInt64(DoublePtr^) := NaN;
-            end;
-  else
-    // representable numbers, normalized value
-    Exponent := Exponent - 15360; // 15360 = $3FFF - $3FF
-    // mantissa shift correction
-    Mantissa := ShiftMantissa(Mantissa,11);
-    If (Mantissa and UInt64($0010000000000000)) <> 0 then
-      Inc(Exponent);
-    UInt64(DoublePtr^) := Sign or (UInt64(Exponent and $7FF) shl 52) or
-                          (Mantissa and UInt64($000FFFFFFFFFFFFF));
-  end;
-*)
-end;
-{$ENDIF PurePascal}
-
-{===============================================================================
-    Internal routines
+    Float <-> HexString conversions- auxiliary routines
 ===============================================================================}
 
 Function RectifyHexString(const Str: String; RequiredLength: Integer): String;
@@ -818,10 +181,10 @@ If Length(Result) <> RequiredLength then
 end;
 
 {===============================================================================
-    Conversion routines
+    Float <-> HexString conversions - implementation
 ===============================================================================}
 {-------------------------------------------------------------------------------
-    Type Float16
+    Float <-> HexString conversions - type Float16
 -------------------------------------------------------------------------------}
 
 Function Float16ToHex(Value: Float16): String;
@@ -861,7 +224,7 @@ If not TryHexToFloat16(HexString,Result) then
 end;
 
 {-------------------------------------------------------------------------------
-    Type Half
+    Float <-> HexString conversions - type Half
 -------------------------------------------------------------------------------}
 
 Function HalfToHex(Value: Half): String;
@@ -891,7 +254,7 @@ Result := HexToFloat16Def(HexString,DefaultValue);
 end;
 
 {-------------------------------------------------------------------------------
-    Type Float32
+    Float <-> HexString conversions - type Float32
 -------------------------------------------------------------------------------}
 
 Function Float32ToHex(Value: Float32): String;
@@ -931,7 +294,7 @@ If not TryHexToFloat32(HexString,Result) then
 end;
 
 {-------------------------------------------------------------------------------
-    Type Single
+    Float <-> HexString conversions - type Single
 -------------------------------------------------------------------------------}
 
 Function SingleToHex(Value: Single): String;
@@ -961,7 +324,7 @@ Result := HexToFloat32Def(HexString,DefaultValue);
 end;
 
 {-------------------------------------------------------------------------------
-    Type Float64
+    Float <-> HexString conversions - type Float64
 -------------------------------------------------------------------------------}
 
 Function Float64ToHex(Value: Float64): String;
@@ -1001,7 +364,7 @@ If not TryHexToFloat64(HexString,Result) then
 end;
 
 {-------------------------------------------------------------------------------
-    Type Double
+    Float <-> HexString conversions - type Double
 -------------------------------------------------------------------------------}
 
 Function DoubleToHex(Value: Double): String;
@@ -1031,7 +394,7 @@ Result := HexToFloat64Def(HexString,DefaultValue);
 end;
 
 {-------------------------------------------------------------------------------
-    Type Float80
+    Float <-> HexString conversions - type Float80
 -------------------------------------------------------------------------------}
 
 Function Float80ToHex(Value: Float80): String;
@@ -1080,7 +443,7 @@ If not TryHexToFloat80(HexString,Result) then
 end;
 
 {-------------------------------------------------------------------------------
-    Type Extended
+    Float <-> HexString conversions - type Extended
 -------------------------------------------------------------------------------}
 
 Function ExtendedToHex(Value: Extended): String;
@@ -1126,7 +489,7 @@ Result := HexToFloat80Def(HexString,DefaultValue);
 end;
 
 {-------------------------------------------------------------------------------
-    Default float type
+    Float <-> HexString conversions - default float type
 -------------------------------------------------------------------------------}
 
 Function FloatToHex(Value: Double): String;

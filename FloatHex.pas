@@ -7,14 +7,39 @@
 -------------------------------------------------------------------------------}
 {===============================================================================
 
-  Floating point numbers <-> HexString conversion routines
+  FloatHex
 
-  ©František Milt 2018-10-21
+    Small set of functions for conversions of floating point numbers to and
+    from hexadecimal strings.
 
-  Version 1.5.5
+    Note that when converting to and from type Extended, the strings will be
+    20 characters long - as if the type is 80bits (10bytes) in size,
+    irrespective of how it is declared (in 64bit windows programs, it is
+    usually declared as a simple alias for type double (64bits)).
+
+  Version 2.0 (2020-11-22)
+
+  Last change 2020-11-22
+
+  ©2015-2020 František Milt
+
+  Contacts:
+    František Milt: frantisek.milt@gmail.com
+
+  Support:
+    If you find this code useful, please consider supporting its author(s) by
+    making a small donation using the following link(s):
+
+      https://www.paypal.me/FMilt
+
+  Changelog:
+    For detailed changelog and history please refer to this git repository:
+
+      github.com/TheLazyTomcat/Lib.FloatHex
 
   Dependencies:
-    AuxTypes - github.com/ncs-sniper/Lib.AuxTypes
+    AuxTypes     - github.com/TheLazyTomcat/Lib.AuxTypes
+    Float80Utils - github.com/TheLazyTomcat/Lib.Float80Utils
 
 ===============================================================================}
 unit FloatHex;
@@ -41,15 +66,6 @@ interface
 uses
   SysUtils,
   AuxTypes, Float80Utils;
-
-// cannot be placed any higher because of FPC
-{$IF SizeOf(Extended) = 8}
-  {$DEFINE Extended64}
-{$ELSEIF SizeOf(Extended) = 10}
-  {$UNDEF Extended64}
-{$ELSE}
-  {$MESSAGE FATAL 'Unsupported platform, type extended must be 8 or 10 bytes.'}
-{$IFEND}
 
 type
   // library-specific exceptions, unused atm.
@@ -130,10 +146,10 @@ Function HexToFloat80Def(const HexString: String; const DefaultValue: Float80): 
     Float <-> HexString conversions - type Extended
 -------------------------------------------------------------------------------}
 
-Function ExtendedToHex(Value: Extended): String;{$IFDEF CanInline} inline;{$ENDIF}
-Function HexToExtended(const HexString: String): Extended;{$IFDEF CanInline} inline;{$ENDIF}
-Function TryHexToExtended(const HexString: String; out Value: Extended): Boolean;{$IFDEF CanInline} inline;{$ENDIF}
-Function HexToExtendedDef(const HexString: String; const DefaultValue: Extended): Extended;{$IFDEF CanInline} inline;{$ENDIF}
+Function ExtendedToHex(Value: Extended): String;
+Function HexToExtended(const HexString: String): Extended;
+Function TryHexToExtended(const HexString: String; out Value: Extended): Boolean;
+Function HexToExtendedDef(const HexString: String; const DefaultValue: Extended): Extended;
 
 {-------------------------------------------------------------------------------
     Float <-> HexString conversions - default float type
@@ -145,6 +161,15 @@ Function TryHexToFloat(const HexString: String; out Value: Double): Boolean;{$IF
 Function HexToFloatDef(const HexString: String; const DefaultValue: Double): Double;{$IFDEF CanInline} inline;{$ENDIF}
 
 implementation
+
+// do not place higher (FPC does not like it)
+{$IF SizeOf(Extended) = 8}
+  {$DEFINE Extended64}
+{$ELSEIF SizeOf(Extended) = 10}
+  {$UNDEF Extended64}
+{$ELSE}
+  {$MESSAGE FATAL 'Unsupported platform, type extended must be 8 or 10 bytes.'}
+{$IFEND}
 
 {===============================================================================
 --------------------------------------------------------------------------------
@@ -399,11 +424,8 @@ end;
 
 Function Float80ToHex(Value: Float80): String;
 var
-  Overlay:  TFloat80Overlay {$IFNDEF Extended64}absolute Value{$ENDIF};
+  Overlay:  TFloat80Overlay absolute Value;
 begin
-{$IFDEF Extended64}
-ConvertFloat64ToFloat80(@Value,@Overlay);
-{$ENDIF}
 Result := IntToHex(Overlay.Part_16,4) + IntToHex(Overlay.Part_64,16);
 end;
 
@@ -412,14 +434,11 @@ end;
 Function HexToFloat80(const HexString: String): Float80;
 var
   Temp:     String;
-  Overlay:  TFloat80Overlay {$IFNDEF Extended64}absolute Result{$ENDIF};
+  Overlay:  TFloat80Overlay absolute Result;
 begin
 Temp := RectifyHexString(HexString,20);
 Overlay.Part_16 := UInt16(StrToInt(Copy(Temp,1,5)));
 Overlay.Part_64 := UInt64(StrToInt64('$' + Copy(Temp,6,16)));
-{$IFDEF Extended64}
-ConvertFloat80ToFloat64(@Overlay,@Result);
-{$ENDIF}
 end;
  
 //------------------------------------------------------------------------------
@@ -447,22 +466,27 @@ end;
 -------------------------------------------------------------------------------}
 
 Function ExtendedToHex(Value: Extended): String;
+var
+  Overlay:  TFloat80Overlay {$IFNDEF Extended64}absolute Value{$ENDIF};
 begin
 {$IFDEF Extended64}
-Result := Float64ToHex(Value);
-{$ELSE}
-Result := Float80ToHex(Value);
+Float64ToFloat80(@Value,@Overlay);
 {$ENDIF}
+Result := IntToHex(Overlay.Part_16,4) + IntToHex(Overlay.Part_64,16);
 end;
 
 //------------------------------------------------------------------------------
 
 Function HexToExtended(const HexString: String): Extended;
+var
+  Temp:     String;
+  Overlay:  TFloat80Overlay {$IFNDEF Extended64}absolute Result{$ENDIF};
 begin
+Temp := RectifyHexString(HexString,20);
+Overlay.Part_16 := UInt16(StrToInt(Copy(Temp,1,5)));
+Overlay.Part_64 := UInt64(StrToInt64('$' + Copy(Temp,6,16)));
 {$IFDEF Extended64}
-Result := HexToFloat64(HexString);
-{$ELSE}
-Result := HexToFloat80(HexString);
+Float80ToFloat64(@Overlay,@Result);
 {$ENDIF}
 end;
 
@@ -470,22 +494,20 @@ end;
 
 Function TryHexToExtended(const HexString: String; out Value: Extended): Boolean;
 begin
-{$IFDEF Extended64}
-Result := TryHexToFloat64(HexString,Value);
-{$ELSE}
-Result := TryHexToFloat80(HexString,Value);
-{$ENDIF}
+try
+  Value := HexToExtended(HexString);
+  Result := True;
+except
+  Result := False;
+end;
 end;
 
 //------------------------------------------------------------------------------
 
 Function HexToExtendedDef(const HexString: String; const DefaultValue: Extended): Extended;
 begin
-{$IFDEF Extended64}
-Result := HexToFloat64Def(HexString,DefaultValue);
-{$ELSE}
-Result := HexToFloat80Def(HexString,DefaultValue);
-{$ENDIF}
+If not TryHexToExtended(HexString,Result) then
+  Result := DefaultValue;
 end;
 
 {-------------------------------------------------------------------------------
